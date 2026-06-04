@@ -1,0 +1,2382 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoyagePlanner 多人雲端共享行程規劃系統</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght=300;400;500;600;700&family=Noto+Sans+TC:wght=300;400;500;700&display=swap" rel="stylesheet">
+    <!-- Leaflet.js (Map) CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+        }
+        /* Custom scrollbars for Kanban columns */
+        .timeline-scroll::-webkit-scrollbar {
+            width: 5px;
+            height: 6px;
+        }
+        .timeline-scroll::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        .timeline-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .timeline-scroll::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        /* Dragging styles */
+        .drag-over {
+            border: 2px dashed #10b981 !important;
+            background-color: #ecfdf5 !important;
+        }
+        /* Map container style */
+        #map {
+            height: 550px;
+            border-radius: 1rem;
+            z-index: 10;
+        }
+        #modalMap {
+            height: 220px;
+            border-radius: 0.75rem;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
+
+    <!-- Navigation Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between gap-3">
+            
+            <!-- Left Header: Destination Photo Holder Card -->
+            <div class="flex items-center gap-3">
+                <div id="tripCoverContainer" class="relative w-28 h-14 rounded-xl overflow-hidden border border-slate-200 bg-slate-100 cursor-pointer group hover:border-indigo-500 transition shadow-sm flex flex-col items-center justify-center" onclick="triggerCoverUpload()">
+                    <img id="tripCoverImage" src="" class="hidden w-full h-full object-cover" alt="目的地封面">
+                    <div id="tripCoverPlaceholder" class="flex flex-col items-center justify-center text-slate-400 text-[10px] text-center p-1">
+                        <i data-lucide="camera" class="w-4 h-4 text-slate-300 mb-0.5"></i>
+                        <span class="font-bold text-slate-600">上傳封面</span>
+                    </div>
+                    <div class="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition flex flex-col items-center justify-center text-white text-[9px] font-bold">
+                        更換圖片
+                    </div>
+                </div>
+                <!-- Hidden cover image input file -->
+                <input type="file" id="coverImageInput" accept="image/*" class="hidden" onchange="handleCoverUpload(event)">
+            </div>
+
+            <!-- Right Header: Export / Import / Undo Actions -->
+            <div class="flex items-center gap-2">
+                <button id="undoBtn" onclick="undo()" disabled class="flex items-center gap-1.5 text-xs sm:text-sm font-semibold px-3 py-2 text-slate-400 bg-slate-100 rounded-xl transition duration-200 cursor-not-allowed" title="復原上一動">
+                    <i data-lucide="undo" class="w-4 h-4"></i>
+                    <span class="hidden md:inline">復原 (Undo)</span>
+                </button>
+                <button id="excelExportBtn" onclick="exportToCSV()" class="flex items-center gap-1.5 text-xs sm:text-sm font-semibold px-3 py-2 text-emerald-700 hover:text-white bg-emerald-50 hover:bg-emerald-600 rounded-xl transition duration-200">
+                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+                    <span class="hidden md:inline">匯出 Excel (CSV)</span>
+                </button>
+                <button id="importBtn" class="flex items-center gap-1.5 text-xs sm:text-sm font-medium px-3 py-2 text-slate-600 hover:bg-slate-200/80 rounded-xl transition duration-200">
+                    <i data-lucide="upload" class="w-4 h-4"></i>
+                    <span class="hidden md:inline">匯入行程</span>
+                </button>
+                <button id="exportBtn" class="flex items-center gap-1.5 text-xs sm:text-sm font-medium px-3 py-2 text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition duration-200 shadow-lg shadow-indigo-100">
+                    <i data-lucide="download" class="w-4 h-4"></i>
+                    <span class="hidden md:inline">備份行程 (JSON)</span>
+                </button>
+                <input type="file" id="importFile" accept=".json" class="hidden" />
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Sidebar - Trip Selection & Settings -->
+        <aside id="sidebar" class="lg:col-span-3 flex flex-col gap-6 transition-all duration-300">
+            
+            <!-- GOOGLE APPS SCRIPT (GAS) SYNC CARD -->
+            <div class="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-5 border border-blue-100 shadow-sm flex flex-col gap-3.5">
+                <div class="flex items-center justify-between">
+                    <h2 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i data-lucide="cloud" class="text-blue-600 w-5 h-5"></i>
+                        ☁️ Google GAS 同步
+                    </h2>
+                    <span id="syncStatusBadge" class="bg-slate-200 text-slate-600 text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                        離線單機
+                    </span>
+                </div>
+                
+                <div class="flex flex-col gap-2">
+                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">輸入 GAS 部署網址 (Web App)</label>
+                    <div class="flex flex-col gap-2">
+                        <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/.../exec" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:border-blue-500">
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="saveToGAS()" class="py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-md shadow-blue-100 flex items-center justify-center gap-1">
+                                <i data-lucide="cloud-lightning" class="w-3.5 h-3.5"></i> 同步至 GAS
+                            </button>
+                            <button onclick="loadFromGAS()" class="py-2 bg-white border border-blue-200 hover:bg-blue-50 text-blue-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 載入最新資料
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-2 mt-1">
+                        <input type="checkbox" id="gasAutoSyncCheckbox" class="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer" onchange="toggleAutoSyncSetting(this.checked)">
+                        <label for="gasAutoSyncCheckbox" class="text-[11px] text-slate-500 font-medium cursor-pointer">變動時自動儲存 (Auto-Sync)</label>
+                    </div>
+
+                    <!-- Setup Instructions Dropdown -->
+                    <div class="border-t pt-2.5 mt-1 border-blue-100/50">
+                        <details class="group">
+                            <summary class="text-[10px] text-slate-500 hover:text-blue-600 cursor-pointer font-bold list-none flex items-center justify-between">
+                                <span>💡 快速教學：如何部署 Google GAS？</span>
+                                <span class="transition group-open:rotate-180"><i data-lucide="chevron-down" class="w-3 h-3"></i></span>
+                            </summary>
+                            <div class="text-[10px] text-slate-400 leading-relaxed mt-1.5 flex flex-col gap-2">
+                                <p>1. 建立一個全新的 Google 試算表。</p>
+                                <p>2. 第一列 A1, B1, C1 填入：<code class="text-slate-600 bg-slate-100 px-1 rounded font-mono font-bold">id</code>、<code class="text-slate-600 bg-slate-100 px-1 rounded font-mono font-bold">payload</code>、<code class="text-slate-600 bg-slate-100 px-1 rounded font-mono font-bold">last_modified</code>。</p>
+                                <p>3. 點擊選單的 <b>「擴充功能」 &gt; 「Apps Script」</b>。</p>
+                                <p>4. 刪除原本所有程式，並貼上以下代碼：</p>
+                                <textarea readonly class="w-full h-24 p-2 bg-slate-800 text-slate-200 text-[9px] font-mono rounded-lg focus:outline-none" onclick="this.select()">/**
+ * 處理 doPost 請求的健壯版程式碼
+ * 包含了安全檢查以防止 'TypeError' 崩潰。
+ */
+function doPost(e) {
+  // 1. 安全檢查：確認是否存在事件物件 'e'
+  if (!e) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "未接收到事件物件。"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  // 2. 安全檢查：確認是否存在 postData
+  if (!e.postData || !e.postData.contents) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "postData 為空或未定義。"
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    // 3. 嘗試解析內容
+    var data = JSON.parse(e.postData.contents);
+    
+    // 在 Apps Script 儀表板記錄收到的資料供除錯使用
+    console.log("已收到資料: " + JSON.stringify(data));
+
+    // --- 在此處撰寫你的處理邏輯 ---
+    // 例如: const name = data.name;
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "資料處理成功。"
+    })).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    // 處理 JSON 解析錯誤或其他執行階段問題
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: "JSON 解析失敗: " + err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * --- 網頁程式 (前端) 呼叫教學 ---
+ * * 若要呼叫此 doPost 函式，請使用 JavaScript 的 fetch API：
+ * * const url = "你的_Web_App_部署_URL";
+ * const payload = { name: "測試使用者", action: "submit" };
+ * * fetch(url, {
+ * method: "POST",
+ * mode: "no-cors", // 注意：若跨域請求遇到限制，請嘗試此項或確保部署為 Web App
+ * headers: {
+ * "Content-Type": "application/json"
+ * },
+ * body: JSON.stringify(payload)
+ * })
+ * .then(response => response.json())
+ * .then(data => console.log("伺服器回應:", data))
+ * .catch(error => console.error("請求錯誤:", error));
+ */</textarea>
+                                <p>5. 點選右上角 <b>「部署」 &gt; 「新增部署」</b>，類型選 <b>「網頁應用程式」</b>，將「誰能存取」改為 <b>「任何人 (Anyone)」</b>，按部署並複製產生的網頁應用程式 URL 貼至上方即可！</p>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MY TRIP LISTS -->
+            <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col gap-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+                        <i data-lucide="plane-takeoff" class="text-indigo-500 w-5 h-5"></i>
+                        我的行程清單
+                    </h3>
+                    <button id="addTripBtn" class="p-1.5 bg-indigo-50 hover:bg-indigo-600 text-indigo-600 hover:text-white rounded-xl transition" title="新增旅遊行程">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <div id="tripList" class="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1 timeline-scroll">
+                    <!-- Dynamic trip cards appear here -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workplace -->
+        <main id="mainWorkplace" class="lg:col-span-9 flex flex-col gap-6 transition-all duration-300">
+            
+            <!-- Quick Notification Bar -->
+            <div id="notification" class="hidden flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl transition-all duration-300">
+                <i data-lucide="check-circle-2" class="w-5 h-5 flex-shrink-0"></i>
+                <p id="notificationMsg" class="text-sm font-medium"></p>
+            </div>
+
+            <!-- Trip Header -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div class="flex flex-col gap-1.5 flex-1">
+                    <div class="flex items-center gap-2">
+                        <h2 id="activeTripName" class="text-2xl font-bold text-slate-800" contenteditable="true" title="點擊直接修改標題">
+                            載入中行程...
+                        </h2>
+                        <i data-lucide="edit-3" class="w-4 h-4 text-slate-400"></i>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-slate-500">
+                        <span class="flex items-center gap-1">
+                            <i data-lucide="calendar" class="w-4 h-4 text-slate-400"></i>
+                            <span id="activeTripDates">未設定日期</span>
+                        </span>
+                        <span class="flex items-center gap-1">
+                            <i data-lucide="layers" class="w-4 h-4 text-slate-400"></i>
+                            <span>天數：共 <span id="activeTripDaysCount">0</span> 天</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 self-start md:self-center">
+                    <button id="toggleSidebarBtn" onclick="toggleSidebar()" class="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl transition duration-150">
+                        <i data-lucide="panel-left-close" class="w-3.5 h-3.5" id="sidebarIcon"></i>
+                        <span id="sidebarToggleText">收合選單</span>
+                    </button>
+                    <button id="editTripDetailsBtn" class="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 text-indigo-600 hover:text-white bg-indigo-50 hover:bg-indigo-600 rounded-xl transition duration-150">
+                        <i data-lucide="settings" class="w-3.5 h-3.5"></i>
+                        編輯日期
+                    </button>
+                    <button id="deleteTripBtn" class="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 text-rose-600 hover:text-white bg-rose-50 hover:bg-rose-600 rounded-xl transition duration-150">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        刪除此行程
+                    </button>
+                </div>
+            </div>
+
+            <!-- Tab Navigation Component -->
+            <div class="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-sm flex flex-wrap gap-1">
+                <button data-tab="timeline" class="tab-btn flex-1 min-w-[90px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition duration-200 bg-indigo-600 text-white">
+                    <i data-lucide="layout-grid" class="w-4 h-4"></i>
+                    多天行程看板
+                </button>
+                <button data-tab="map" class="tab-btn flex-1 min-w-[90px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition duration-200 text-slate-600 hover:bg-slate-50">
+                    <i data-lucide="map" class="w-4 h-4"></i>
+                    彩繪地圖路線
+                </button>
+                <button data-tab="checklist" class="tab-btn flex-1 min-w-[90px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition duration-200 text-slate-600 hover:bg-slate-50">
+                    <i data-lucide="check-square" class="w-4 h-4"></i>
+                    行前打包清單
+                </button>
+            </div>
+
+            <!-- TAB 1: Timeline Section -->
+            <div id="tab-timeline" class="tab-content flex flex-col gap-4">
+                
+                <!-- Day Columns Container Header with Actions -->
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <h3 class="font-bold text-lg text-slate-800 flex items-center gap-2">
+                        <i data-lucide="clock" class="text-indigo-500 w-5 h-5"></i>
+                        拖放行程規劃板（僅顯示已規劃行程）
+                    </h3>
+                    <button id="addDayColBtn" class="flex items-center gap-1.5 text-xs font-bold px-3 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white border border-indigo-200 rounded-xl transition">
+                        <i data-lucide="plus" class="w-4 h-4"></i>
+                        增加一日
+                    </button>
+                </div>
+
+                <!-- TOP DAY QUICK JUMP NAVIGATION BAR -->
+                <div class="bg-white border border-slate-200 p-3 rounded-2xl shadow-sm flex flex-col gap-1.5">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                        <i data-lucide="navigation" class="w-3.5 h-3.5"></i>
+                        天數快速導航（點擊直接橫向滾動至該天）
+                    </span>
+                    <div id="dayNavBar" class="flex flex-wrap gap-1.5 overflow-x-auto py-1 timeline-scroll">
+                        <!-- Dynamic day buttons generate here -->
+                    </div>
+                </div>
+
+                <!-- Horizontal scroll grid for Days -->
+                <div id="kanbanContainer" class="flex gap-4 overflow-x-auto pb-4 items-start scroll-smooth timeline-scroll min-h-[500px]">
+                    <!-- Dynamic Kanban columns go here -->
+                </div>
+            </div>
+
+            <!-- TAB 2: Map Section -->
+            <div id="tab-map" class="tab-content hidden flex flex-col gap-4">
+                <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4">
+                    <!-- Map Canvas -->
+                    <div class="flex-1">
+                        <div class="mb-4">
+                            <h3 class="font-bold text-slate-800 text-lg">彩繪路線地圖</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">系統將為每日行程指派專屬色彩，並在地圖上繪製多日行進軌跡與地標標記。</p>
+                        </div>
+                        <div id="map" class="w-full relative shadow-inner border border-slate-100"></div>
+                    </div>
+                    
+                    <!-- Map Legend / Color guide with toggles -->
+                    <div class="w-full md:w-64 flex flex-col gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100 flex-shrink-0">
+                        <h4 class="font-bold text-slate-700 text-sm border-b pb-2 flex items-center gap-2">
+                            <i data-lucide="layers" class="w-4 h-4 text-slate-500"></i>
+                            顯示天數過濾器
+                        </h4>
+                        <p class="text-[11px] text-slate-400 leading-relaxed">您可以自由勾選/取消各天行程，以單獨查看特定天數的景點和路線圖。</p>
+                        <div id="mapLegendContainer" class="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1">
+                            <!-- Dynamic colored legend bullet points will load here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3: Checklist Section -->
+            <div id="tab-checklist" class="tab-content hidden flex flex-col gap-6">
+                <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+                        <div>
+                            <h3 class="font-bold text-slate-800 text-lg">行前打包與備忘清單</h3>
+                            <p class="text-xs text-slate-400 mt-0.5">預先勾選確認攜帶物品，避免遺漏行囊</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button id="addChecklistItemBtn" class="flex items-center gap-1 text-xs font-semibold px-3 py-2 text-indigo-600 hover:bg-indigo-50 border border-indigo-200 rounded-xl transition">
+                                <i data-lucide="plus" class="w-4 h-4"></i>
+                                新增自訂物品
+                            </button>
+                            <button id="resetChecklistBtn" class="flex items-center gap-1 text-xs font-semibold px-3 py-2 text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl transition">
+                                <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                                重設清單
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="checklistCategoriesContainer" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <!-- Dynamic Checklist segments populate here -->
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- BATCH ACTION BAR (STICKY AT BOTTOM) -->
+    <div id="batchColorBar" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center justify-between gap-6 border border-slate-700/80 max-w-sm w-[90%]">
+        <div class="flex items-center gap-3">
+            <span class="bg-indigo-600 text-xs px-2.5 py-1 rounded-full font-bold" id="batchSelectCount">0</span>
+            <span class="text-xs text-slate-300 font-medium">已選取</span>
+        </div>
+        
+        <div class="h-6 w-px bg-slate-700"></div>
+        
+        <div class="flex items-center gap-2">
+            <!-- Custom palette for batch change -->
+            <div class="flex items-center gap-1">
+                <button onclick="changeBatchColor('bg-rose-50 border-rose-200 text-rose-800')" class="w-4 h-4 rounded-full bg-rose-400 border border-white" title="櫻花粉"></button>
+                <button onclick="changeBatchColor('bg-indigo-50 border-indigo-200 text-indigo-800')" class="w-4 h-4 rounded-full bg-indigo-400 border border-white" title="經典藍"></button>
+                <button onclick="changeBatchColor('bg-emerald-50 border-emerald-200 text-emerald-800')" class="w-4 h-4 rounded-full bg-emerald-400 border border-white" title="森林綠"></button>
+                <button onclick="changeBatchColor('bg-amber-50 border-amber-200 text-amber-800')" class="w-4 h-4 rounded-full bg-amber-400 border border-white" title="落日橘"></button>
+                <button onclick="changeBatchColor('bg-violet-50 border-violet-200 text-violet-800')" class="w-4 h-4 rounded-full bg-violet-400 border border-white" title="薰衣草"></button>
+                <button onclick="changeBatchColor('auto')" class="text-[9px] border border-slate-600 hover:bg-slate-800 px-1 py-0.5 rounded text-slate-300 ml-1">重設</button>
+            </div>
+            
+            <div class="h-6 w-px bg-slate-700"></div>
+
+            <button onclick="deleteBatchItems()" class="flex items-center gap-1 px-2.5 py-1.5 text-xs text-rose-400 hover:text-rose-300 hover:bg-slate-800 rounded-xl transition font-semibold" title="批次刪除">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            </button>
+            <button onclick="clearBatchSelection()" class="text-xs text-slate-400 hover:text-white px-1.5 py-1.5 hover:bg-slate-800 rounded-lg transition font-medium">
+                取消
+            </button>
+        </div>
+    </div>
+
+    <!-- 1. ADD / EDIT TRIP MODAL -->
+    <div id="tripModal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl transition-all scale-95 opacity-0 transform duration-300" id="tripModalContent">
+            <div class="bg-indigo-600 px-6 py-4 text-white flex justify-between items-center">
+                <h3 id="tripModalTitle" class="font-bold text-lg">新增精彩行程</h3>
+                <button type="button" onclick="closeTripModal()" class="text-white/80 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <form id="tripForm" class="p-6 flex flex-col gap-4">
+                <input type="hidden" id="editTripIndex" value="">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">行程名稱 *</label>
+                    <input type="text" id="tripName" required placeholder="例如：東京浪漫櫻花 7 日遊" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">出發日期</label>
+                        <input type="date" id="tripStartDate" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">回程日期</label>
+                        <input type="date" id="tripEndDate" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm">
+                    </div>
+                </div>
+                <div class="flex items-center gap-3 mt-4">
+                    <button type="button" onclick="closeTripModal()" class="flex-1 py-2.5 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition">取消</button>
+                    <button type="submit" class="flex-1 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-lg shadow-indigo-100">儲存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 2. ADD / EDIT EVENT MODAL -->
+    <div id="eventModal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl transition-all scale-95 opacity-0 transform duration-300" id="eventModalContent">
+            <div class="bg-indigo-600 px-6 py-4 text-white flex justify-between items-center">
+                <h3 id="eventModalTitle" class="font-bold text-lg">編輯行程細節</h3>
+                <button type="button" onclick="closeEventModal()" class="text-white/80 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <form id="eventForm" class="p-5 flex flex-col gap-4 max-h-[85vh] overflow-y-auto timeline-scroll animate-none">
+                <input type="hidden" id="eventDayIndex" value="">
+                <input type="hidden" id="eventOriginalTimeKey" value="">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">行程主題 / 景點名稱 *</label>
+                        <input type="text" id="eventName" required placeholder="例如：淺草寺、一蘭拉麵" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">設定時段 (可選每 5 分鐘格) *</label>
+                        <select id="eventTimeSelect" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm bg-white font-semibold text-slate-700">
+                            <!-- Dynamic timeslot option list populated via script -->
+                        </select>
+                    </div>
+                </div>
+
+                <!-- PHOTO ATTACHMENT SECTION -->
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex flex-col gap-2">
+                    <span class="text-xs font-bold text-slate-600 block">景點照片配圖 / 手機拍照</span>
+                    <div class="flex items-center gap-3">
+                        <button type="button" onclick="document.getElementById('eventImageInput').click()" class="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+                            <i data-lucide="camera" class="w-4 h-4"></i>
+                            上傳或拍攝照片
+                        </button>
+                        <input type="file" id="eventImageInput" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
+                        <span class="text-[10px] text-slate-400">支援拍照與相片上傳 (系統自動優化大小)</span>
+                    </div>
+                    <!-- Photo preview container -->
+                    <div id="modalImagePreviewContainer" class="hidden relative mt-2 rounded-lg overflow-hidden border border-slate-200 w-full max-h-40 flex justify-center bg-slate-100">
+                        <img id="modalImagePreview" src="" alt="景點預覽" class="object-cover max-h-40 w-full" onerror="this.src='https://placehold.co/400x200/e2e8f0/64748b?text=Image+Load+Error'">
+                        <button type="button" onclick="removeUploadedImage()" class="absolute top-2 right-2 p-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-full shadow-md transition" title="移除相片">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Interactive Map Picker Integration with Autocomplete -->
+                <div class="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex flex-col gap-2 relative">
+                    <span class="text-xs font-bold text-slate-600 block">景點地圖定位點</span>
+                    <div class="relative">
+                        <div class="flex gap-2">
+                            <input type="text" id="modalMapSearch" placeholder="輸入關鍵字搜尋，例如：上野" class="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" autocomplete="off">
+                            <button type="button" onclick="searchLocationInModal()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition">
+                                <i data-lucide="search" class="w-3.5 h-3.5"></i>
+                                搜尋
+                            </button>
+                        </div>
+                        <!-- Floating Autocomplete Results Container -->
+                        <div id="modalSearchDropdown" class="hidden absolute left-0 right-0 top-full mt-1.5 z-[130] bg-white border border-slate-200 rounded-xl shadow-xl max-h-44 overflow-y-auto timeline-scroll flex flex-col divide-y divide-slate-100">
+                            <!-- Dynamic suggestions appear here -->
+                        </div>
+                    </div>
+                    <div id="modalMap" class="w-full shadow-inner border border-slate-200"></div>
+                    <div class="grid grid-cols-2 gap-3 mt-1.5">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">緯度 (Latitude)</label>
+                            <input type="number" id="eventLat" step="any" readonly placeholder="點擊地圖或搜尋自動填入" class="w-full px-2.5 py-1.5 border border-slate-200 rounded bg-slate-100 text-slate-500 text-xs cursor-not-allowed">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">經度 (Longitude)</label>
+                            <input type="number" id="eventLng" step="any" readonly placeholder="點擊地圖或搜尋自動填入" class="w-full px-2.5 py-1.5 border border-slate-200 rounded bg-slate-100 text-slate-500 text-xs cursor-not-allowed">
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">詳細說明 / 貼心備忘</label>
+                    <textarea id="eventNotes" rows="2" placeholder="備忘詳細內容（地鐵出口、預約碼、地標必玩等等）" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm"></textarea>
+                </div>
+                <div class="flex items-center gap-3 mt-2">
+                    <button type="button" onclick="closeEventModal()" class="flex-1 py-2.5 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition">取消</button>
+                    <button type="submit" class="flex-1 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-lg shadow-indigo-100">儲存行程</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 3. CUSTOM CONFIRMATION MODAL -->
+    <div id="confirmModal" class="hidden fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl transition-all scale-95 opacity-0 transform duration-300" id="confirmModalContent">
+            <div class="p-6 flex flex-col items-center text-center gap-4">
+                <div class="bg-rose-50 text-rose-500 p-3 rounded-full">
+                    <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+                </div>
+                <div>
+                    <h3 id="confirmTitle" class="font-bold text-lg text-slate-800">確定刪除？</h3>
+                    <p id="confirmDesc" class="text-sm text-slate-500 mt-1">此動作無法復原，請確認是否繼續執行。</p>
+                </div>
+                <div class="flex items-center gap-3 w-full mt-2">
+                    <button id="confirmCancelBtn" class="flex-1 py-2.5 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition">取消</button>
+                    <button id="confirmOkBtn" class="flex-1 py-2.5 text-sm font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition shadow-lg shadow-rose-100">確認</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. ADD CUSTOM CHECKLIST ITEM MODAL -->
+    <div id="checklistModal" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+        <div class="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl transition-all scale-95 opacity-0 transform duration-300" id="checklistModalContent">
+            <div class="bg-indigo-600 px-6 py-4 text-white flex justify-between items-center">
+                <h3 class="font-bold text-lg">新增自訂打包項目</h3>
+                <button type="button" onclick="closeChecklistModal()" class="text-white/80 hover:text-white"><i data-lucide="x" class="w-5 h-5"></i></button>
+            </div>
+            <form id="checklistForm" class="p-6 flex flex-col gap-4">
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">物品名稱 *</label>
+                    <input type="text" id="checklistName" required placeholder="如：隱形眼鏡、降噪耳機" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">分類歸屬</label>
+                    <select id="checklistCategory" class="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 text-sm bg-white">
+                        <option value="important">📑 重要證件與金流</option>
+                        <option value="clothing">👕 衣物與穿搭配件</option>
+                        <option value="electronics">🔌 電子數位與充電</option>
+                        <option value="toiletries">🧴 盥洗與個人美妝</option>
+                        <option value="medicine">💊 必備常備保健藥品</option>
+                    </select>
+                </div>
+                <div class="flex items-center gap-3 mt-4">
+                    <button type="button" onclick="closeChecklistModal()" class="flex-1 py-2.5 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition">取消</button>
+                    <button type="submit" class="flex-1 py-2.5 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition shadow-lg shadow-indigo-100">加入打包項目</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Footer Section -->
+    <footer class="bg-white border-t border-slate-200 py-6 mt-12 text-center text-xs text-slate-400">
+        <div class="max-w-7xl mx-auto px-4">
+            <p>© 2026 VoyagePlanner. 多人實時共享行程系統與備份管理工具。</p>
+        </div>
+    </footer>
+
+    <!-- Javascript Core Architecture -->
+    <script>
+        // Predefined beautiful palettes for days
+        const DAY_THEMES = [
+            { bg: 'bg-rose-50 border-rose-200 text-rose-800', badge: 'bg-rose-100 text-rose-700', marker: '#f43f5e' },
+            { bg: 'bg-indigo-50 border-indigo-200 text-indigo-800', badge: 'bg-indigo-100 text-indigo-700', marker: '#6366f1' },
+            { bg: 'bg-emerald-50 border-emerald-200 text-emerald-800', badge: 'bg-emerald-100 text-emerald-700', marker: '#10b981' },
+            { bg: 'bg-amber-50 border-amber-200 text-amber-800', badge: 'bg-amber-100 text-amber-700', marker: '#f59e0b' },
+            { bg: 'bg-violet-50 border-violet-200 text-violet-800', badge: 'bg-violet-100 text-violet-700', marker: '#8b5cf6' },
+            { bg: 'bg-teal-50 border-teal-200 text-teal-800', badge: 'bg-teal-100 text-teal-700', marker: '#14b8a6' },
+            { bg: 'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-800', badge: 'bg-fuchsia-100 text-fuchsia-700', marker: '#d946ef' },
+            { bg: 'bg-sky-50 border-sky-200 text-sky-800', badge: 'bg-sky-100 text-sky-700', marker: '#0ea5e9' }
+        ];
+
+        function getDayTheme(dayIdx) {
+            return DAY_THEMES[dayIdx % DAY_THEMES.length];
+        }
+
+        // Global State variables
+        let trips = [];
+        let tripsHistory = [];
+        const MAX_HISTORY = 15;
+        let activeTripIndex = 0;
+        let activeTab = 'timeline';
+        let draggedData = null;
+        let mapInstance = null;
+        let mapMarkersGroup = null;
+        let mapLinesGroup = null;
+        let enabledMapDays = [];
+        let selectedEvents = []; // Multi-select array {dayIdx, timeKey}
+        let tempUploadedImage = '';
+        let searchDebounceTimeout = null;
+        let gasDebounceTimeout = null;
+
+        let modalMapInstance = null;
+        let modalMapMarker = null;
+
+        // Default travel data mock
+        const sampleTrips = [
+            {
+                name: "東京 7 日深度慢活",
+                startDate: "2026-06-01",
+                endDate: "2026-06-07",
+                coverImage: "",
+                days: [
+                    {
+                        region: "上野、淺草",
+                        events: {
+                            "09:15": { name: "抵達東京成田機場 (NRT)", notes: "領取 JR Pass、網卡、搭乘 Skyliner 前往上野", lat: 35.771987, lng: 140.39285, image: "" },
+                            "14:30": { name: "上野御徒町大酒店 check-in", notes: "寄放行李，稍作休息", lat: 35.7075, lng: 139.7745, image: "" },
+                            "16:45": { name: "淺草寺參拜", notes: "雷門大燈籠拍照、仲見世通吃人形燒", lat: 35.7147, lng: 139.7966, image: "" }
+                        }
+                    },
+                    {
+                        region: "築地、銀座",
+                        events: {
+                            "08:00": { name: "築地場外市場美食饗宴", notes: "品嚐玉子燒、生魚片丼飯、草莓大福", lat: 35.6655, lng: 139.7701, image: "" },
+                            "13:15": { name: "銀座資生堂 Parlour 下午茶", notes: "預約精緻下午茶，貴婦級享受", lat: 35.6698, lng: 139.7618, image: "" }
+                        }
+                    },
+                    { region: "新宿", events: {} },
+                    { region: "澀谷、原宿", events: {} },
+                    { region: "箱根、富士山", events: {} },
+                    { region: "鎌倉、江之島", events: {} },
+                    { region: "上野購物、歸途", events: {} }
+                ],
+                checklist: {
+                    important: [
+                        { name: "護照、機票證明 (列印/電子檔)", checked: true },
+                        { name: "日幣現金、雙幣信用卡", checked: true },
+                        { name: "海外旅遊平安保險單", checked: false }
+                    ],
+                    clothing: [
+                        { name: "百搭休閒外套、發熱衣", checked: false },
+                        { name: "舒適好走路的步鞋", checked: true }
+                    ],
+                    electronics: [
+                        { name: "手機、充電器、行動電源", checked: true },
+                        { name: "日本上網 SIM 卡 / WiFi 機", checked: true }
+                    ],
+                    toiletries: [
+                        { name: "個人保養旅行組、防曬乳", checked: false }
+                    ],
+                    medicine: [
+                        { name: "常備感冒藥、止痛藥、暈車藥", checked: false }
+                    ]
+                }
+            }
+        ];
+
+        // Double binding logic to synchronize with local changes correctly
+        Object.defineProperty(window, 'trips', {
+            get() { return trips; },
+            set(newTrips) {
+                trips = newTrips;
+            },
+            configurable: true
+        });
+
+        Object.defineProperty(window, 'activeTripIndex', {
+            get() { return activeTripIndex; },
+            set(val) { activeTripIndex = val; },
+            configurable: true
+        });
+
+        // Push current state to history stack for Undo
+        function pushToHistory() {
+            tripsHistory.push(JSON.stringify(trips));
+            if (tripsHistory.length > MAX_HISTORY) {
+                tripsHistory.shift();
+            }
+            updateUndoButtonState();
+        }
+
+        function undo() {
+            if (tripsHistory.length === 0) return;
+            const previousStateStr = tripsHistory.pop();
+            try {
+                trips = JSON.parse(previousStateStr);
+                saveToStorageOnly();
+                
+                // Trigger auto sync to GAS if enabled
+                triggerGasAutoSync();
+                
+                renderTripSidebar();
+                selectTrip(activeTripIndex < trips.length ? activeTripIndex : 0);
+                triggerNotification("⏪ 已成功復原上一步！");
+            } catch (e) {
+                console.error("Undo action failed:", e);
+                triggerNotification("復原失敗，請重試！");
+            }
+            updateUndoButtonState();
+        }
+
+        function updateUndoButtonState() {
+            const undoBtn = document.getElementById('undoBtn');
+            if (!undoBtn) return;
+            if (tripsHistory.length > 0) {
+                undoBtn.removeAttribute('disabled');
+                undoBtn.className = "flex items-center gap-1.5 text-xs sm:text-sm font-semibold px-3 py-2 text-indigo-700 hover:text-white bg-indigo-50 hover:bg-indigo-600 rounded-xl transition duration-200 cursor-pointer shadow-sm";
+            } else {
+                undoBtn.setAttribute('disabled', 'true');
+                undoBtn.className = "flex items-center gap-1.5 text-xs sm:text-sm font-semibold px-3 py-2 text-slate-400 bg-slate-100 rounded-xl transition duration-200 cursor-not-allowed";
+            }
+            if (window.lucide) lucide.createIcons();
+        }
+
+        // Sidebar Visibility handler
+        let sidebarVisible = true;
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const mainWorkplace = document.getElementById('mainWorkplace');
+            const sidebarToggleText = document.getElementById('sidebarToggleText');
+            const sidebarIcon = document.getElementById('sidebarIcon');
+
+            sidebarVisible = !sidebarVisible;
+
+            if (sidebarVisible) {
+                sidebar.classList.remove('hidden');
+                mainWorkplace.className = "lg:col-span-9 flex flex-col gap-6 transition-all duration-300";
+                sidebarToggleText.innerText = "收合選單";
+                sidebarIcon.setAttribute('data-lucide', 'panel-left-close');
+            } else {
+                sidebar.classList.add('hidden');
+                mainWorkplace.className = "lg:col-span-12 flex flex-col gap-6 transition-all duration-300";
+                sidebarToggleText.innerText = "展開選單";
+                sidebarIcon.setAttribute('data-lucide', 'panel-left-open');
+            }
+
+            if (window.lucide) lucide.createIcons();
+
+            // Re-render map after resize
+            setTimeout(() => {
+                if (mapInstance) mapInstance.invalidateSize();
+            }, 300);
+        }
+
+        // Setup notification bar
+        function triggerNotification(message) {
+            const notif = document.getElementById('notification');
+            const msg = document.getElementById('notificationMsg');
+            if (notif && msg) {
+                msg.innerText = message;
+                notif.classList.remove('hidden');
+                setTimeout(() => {
+                    notif.classList.add('hidden');
+                }, 4000);
+            }
+        }
+
+        // Google Apps Script Custom Sync Integration (Post-Only Protocol)
+        function updateGasStatus(status, text) {
+            const badge = document.getElementById('syncStatusBadge');
+            if (!badge) return;
+            
+            if (status === 'synced') {
+                badge.className = "bg-blue-500 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider animate-pulse";
+                badge.innerText = text;
+            } else if (status === 'saving') {
+                badge.className = "bg-amber-500 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider";
+                badge.innerText = text;
+            } else if (status === 'error') {
+                badge.className = "bg-rose-500 text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider";
+                badge.innerText = text;
+            } else {
+                badge.className = "bg-slate-200 text-slate-600 text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider";
+                badge.innerText = "離線單機";
+            }
+        }
+
+        async function saveToGAS(silent = false) {
+            const apiUrl = document.getElementById('gasUrl').value.trim();
+            if (!apiUrl) {
+                if (!silent) triggerNotification("⚠️ 請先輸入 Google GAS 部署網址 (Web App)！");
+                return;
+            }
+            
+            localStorage.setItem('voyage_planner_gas_url', apiUrl);
+            updateGasStatus("saving", "正在同步...");
+            
+            const payloadStr = JSON.stringify(window.trips);
+            const lastModifiedStr = new Date().toISOString();
+            
+            try {
+                // We perform a POST request with 'text/plain' to avoid CORS preflight failures in Google Apps Script!
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8'
+                    },
+                    body: JSON.stringify({
+                        action: 'save',
+                        id: 'active_planner',
+                        payload: payloadStr,
+                        last_modified: lastModifiedStr
+                    })
+                });
+                
+                if (!response.ok) throw new Error("HTTP 響應狀態異常: " + response.status);
+                
+                const result = await response.json();
+                if (result.status === 'success') {
+                    updateGasStatus("synced", "同步成功 ✓");
+                    if (!silent) triggerNotification("☁️ 行程資料已成功儲存至 Google GAS 雲端試算表！");
+                } else {
+                    throw new Error("GAS 傳回失敗狀態");
+                }
+            } catch (error) {
+                console.error("GAS save error:", error);
+                updateGasStatus("error", "同步失敗 ❌");
+                if (!silent) triggerNotification("❌ 無法連接 GAS！請確認 1. Apps Script 已部署為「網頁應用程式」 2. 存取權設為「任何人」 3. 貼上正確的部署網址！");
+            }
+        }
+
+        async function loadFromGAS(quiet = false) {
+            const apiUrl = document.getElementById('gasUrl').value.trim();
+            if (!apiUrl) {
+                if (!quiet) triggerNotification("⚠️ 請先輸入 Google GAS 部署網址 (Web App)！");
+                return;
+            }
+            
+            localStorage.setItem('voyage_planner_gas_url', apiUrl);
+            updateGasStatus("saving", "載入中...");
+            
+            try {
+                // Standard POST loading method
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8'
+                    },
+                    body: JSON.stringify({
+                        action: 'load',
+                        id: 'active_planner'
+                    })
+                });
+                
+                if (!response.ok) throw new Error("HTTP 響應狀態異常: " + response.status);
+                
+                const result = await response.json();
+                if (result.status === 'success' && result.payload) {
+                    const loadedTrips = JSON.parse(result.payload);
+                    window.trips = loadedTrips;
+                    window.saveToStorageOnly();
+                    window.renderTripSidebar();
+                    window.selectTrip(window.activeTripIndex < window.trips.length ? window.activeTripIndex : 0);
+                    
+                    updateGasStatus("synced", "載入成功 ✓");
+                    if (!quiet) triggerNotification("🔄 已成功自 Google GAS 試算表拉取最新行程資料！");
+                } else if (result.status === 'empty') {
+                    updateGasStatus("synced", "GAS 無資料");
+                    if (!quiet) triggerNotification("💡 您的 Google 試算表中尚無行程資料。請點擊「同步至 GAS」上傳！");
+                } else {
+                    throw new Error("GAS 讀取失敗");
+                }
+            } catch (error) {
+                console.error("GAS load error:", error);
+                updateGasStatus("error", "載入失敗 ❌");
+                if (!quiet) triggerNotification("❌ 無法從 Google 試算表載入！請確認 1. A1, B1, C1 有設定正確標頭 2. GAS 已成功部署為任何人存取！");
+            }
+        }
+
+        function triggerGasAutoSync() {
+            const isAuto = document.getElementById('gasAutoSyncCheckbox')?.checked;
+            if (isAuto) {
+                clearTimeout(gasDebounceTimeout);
+                gasDebounceTimeout = setTimeout(() => {
+                    saveToGAS(true); // silent auto-sync update
+                }, 1500); // 1.5 seconds debounce
+            }
+        }
+
+        function toggleAutoSyncSetting(isChecked) {
+            localStorage.setItem('voyage_planner_gas_autosync', isChecked ? 'true' : 'false');
+            if (isChecked) {
+                triggerGasAutoSync();
+            }
+        }
+
+        // Local storage serialization helpers
+        function loadTripsFromStorage() {
+            const data = localStorage.getItem('voyage_planner_trips');
+            if (data) {
+                try {
+                    trips = JSON.parse(data);
+                } catch(e) {
+                    console.error("Failed to parse trips local storage, loading fallback.", e);
+                    trips = sampleTrips;
+                }
+            } else {
+                trips = sampleTrips;
+            }
+        }
+
+        function saveToStorageOnly() {
+            localStorage.setItem('voyage_planner_trips', JSON.stringify(trips));
+        }
+
+        function saveToStorage() {
+            saveToStorageOnly();
+            triggerGasAutoSync();
+        }
+
+        window.pushLocalToCloud = function() {
+            triggerGasAutoSync();
+        };
+
+        // Render Day Navigation Bar at top
+        function renderDayNavBar() {
+            const container = document.getElementById('dayNavBar');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const trip = trips[activeTripIndex];
+            if (!trip || !trip.days) return;
+
+            trip.days.forEach((day, idx) => {
+                const theme = getDayTheme(idx);
+                const btn = document.createElement('button');
+                btn.className = `flex-shrink-0 px-3 py-1.5 text-xs font-bold rounded-lg border transition flex items-center gap-1 hover:brightness-95 ${theme.bg}`;
+                btn.innerHTML = `<i data-lucide="calendar" class="w-3.5 h-3.5"></i> Day ${idx + 1}`;
+                btn.onclick = () => {
+                    const col = document.getElementById(`kanban-col-${idx}`);
+                    if (col) {
+                        col.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                    }
+                };
+                container.appendChild(btn);
+            });
+
+            if (window.lucide) lucide.createIcons();
+        }
+
+        // Main Workplace rendering
+        function selectTrip(index) {
+            activeTripIndex = index;
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            enabledMapDays = trip.days.map((_, i) => i);
+
+            // Set trip cover display
+            renderCoverImageDisplay();
+
+            // Set Title & details
+            document.getElementById('activeTripName').innerText = trip.name;
+            document.getElementById('activeTripDates').innerText = (trip.startDate || trip.endDate) 
+                ? `${trip.startDate || ''} 至 ${trip.endDate || ''}` 
+                : '未設定日期';
+            document.getElementById('activeTripDaysCount').innerText = trip.days.length;
+
+            renderDayNavBar();
+            renderKanbanGrid();
+            renderChecklist();
+            initMap();
+
+            // Mark active list item
+            document.querySelectorAll('.trip-card').forEach((el, i) => {
+                if (i === index) {
+                    el.classList.add('border-indigo-500', 'bg-indigo-50/50');
+                } else {
+                    el.classList.remove('border-indigo-500', 'bg-indigo-50/50');
+                }
+            });
+        }
+
+        // Left Sidebar cover renderer
+        function triggerCoverUpload() {
+            document.getElementById('coverImageInput').click();
+        }
+
+        function handleCoverUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 300;
+                    const MAX_HEIGHT = 160;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    const compressedBase64 = canvas.toDataURL('image/jpeg', 0.5);
+                    
+                    pushToHistory();
+                    trips[activeTripIndex].coverImage = compressedBase64;
+                    
+                    saveToStorage();
+                    renderCoverImageDisplay();
+                    triggerNotification("成功更新行程地區封面！");
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderCoverImageDisplay() {
+            const trip = trips[activeTripIndex];
+            const imgEl = document.getElementById('tripCoverImage');
+            const placeholderEl = document.getElementById('tripCoverPlaceholder');
+            if (trip && trip.coverImage) {
+                imgEl.src = trip.coverImage;
+                imgEl.classList.remove('hidden');
+                placeholderEl.classList.add('hidden');
+            } else {
+                imgEl.classList.add('hidden');
+                placeholderEl.classList.remove('hidden');
+            }
+        }
+
+        // Main Kanban Grid renderer
+        function renderKanbanGrid() {
+            const container = document.getElementById('kanbanContainer');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const trip = trips[activeTripIndex];
+            if (!trip || !trip.days) return;
+
+            trip.days.forEach((day, dayIdx) => {
+                const dayTheme = getDayTheme(dayIdx);
+                const col = document.createElement('div');
+                col.id = `kanban-col-${dayIdx}`;
+                col.className = `flex-shrink-0 w-52 sm:w-56 bg-white border border-slate-200 rounded-2xl p-4 flex flex-col gap-3 min-h-[460px] relative transition day-drop-zone`;
+                
+                // Allow Drop events on column body
+                col.ondragover = (e) => handleDragOver(e, col);
+                col.ondragleave = (e) => handleDragLeave(e, col);
+                col.ondrop = (e) => handleDropOnDay(e, dayIdx);
+
+                // Sort events by chronological time order
+                const sortedTimeKeys = Object.keys(day.events || {}).sort();
+
+                let eventsHtml = '';
+                if (sortedTimeKeys.length === 0) {
+                    // Empty placeholder
+                    eventsHtml = `
+                        <div class="flex-1 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl p-4 text-center text-slate-300 min-h-[140px]">
+                            <i data-lucide="calendar-plus" class="w-6 h-6 mb-1 text-slate-200"></i>
+                            <span class="text-[10px] font-bold">今日尚無行程</span>
+                        </div>
+                    `;
+                } else {
+                    sortedTimeKeys.forEach(timeKey => {
+                        const evt = day.events[timeKey];
+                        const isSelected = selectedEvents.some(item => item.dayIdx === dayIdx && item.timeKey === timeKey);
+                        const selectionCheck = isSelected ? 'checked' : '';
+                        
+                        // Check if we have a custom override background color
+                        const cardBg = evt.customBg ? evt.customBg : dayTheme.bg;
+
+                        eventsHtml += `
+                            <div draggable="true" 
+                                 ondragstart="handleDragStart(event, ${dayIdx}, '${timeKey}')"
+                                 ondragend="handleDragEnd(event)"
+                                 class="p-3 border rounded-xl shadow-sm flex flex-col gap-1.5 cursor-grab active:cursor-grabbing hover:shadow-md transition relative group ${cardBg}">
+                                
+                                <!-- Header: Checkbox and Delete -->
+                                <div class="flex items-start justify-between gap-1">
+                                    <div class="flex items-center gap-1.5">
+                                        <input type="checkbox" ${selectionCheck} 
+                                               onchange="toggleEventSelection(event, ${dayIdx}, '${timeKey}')" 
+                                               class="w-3.5 h-3.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer">
+                                        <span class="text-[10px] font-bold uppercase tracking-wider ${dayTheme.badge} px-1.5 py-0.5 rounded font-mono">${timeKey}</span>
+                                    </div>
+                                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                                        <button onclick="editEvent(${dayIdx}, '${timeKey}')" class="p-1 text-slate-400 hover:text-slate-600 rounded bg-white/80" title="編輯行程">
+                                            <i data-lucide="edit-3" class="w-3 h-3"></i>
+                                        </button>
+                                        <button onclick="deleteEventSlot(${dayIdx}, '${timeKey}')" class="p-1 text-rose-500 hover:text-rose-700 rounded bg-rose-50 border border-rose-100" title="刪除行程">
+                                            <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Body: Title & Photo -->
+                                <div class="flex flex-col gap-1.5">
+                                    <div class="text-xs font-bold leading-snug break-words" contenteditable="true" onblur="saveEventNameInline(${dayIdx}, '${timeKey}', this.innerText)">
+                                        ${evt.name}
+                                    </div>
+                                    ${evt.image ? `
+                                        <div class="w-full h-16 rounded overflow-hidden border border-slate-200 bg-slate-100">
+                                            <img src="${evt.image}" class="w-full h-full object-cover" alt="景點相片">
+                                        </div>
+                                    ` : ''}
+                                </div>
+
+                                <!-- Notes (Expandable) -->
+                                ${evt.notes ? `
+                                    <div class="text-[10px] opacity-75 border-t border-slate-200/50 pt-1 leading-relaxed break-words">
+                                        ${evt.notes}
+                                    </div>
+                                ` : ''}
+
+                                <!-- Lat/Lng Tag indicator -->
+                                ${(evt.lat && evt.lng) ? `
+                                    <span class="text-[8px] opacity-60 flex items-center gap-0.5 font-mono">
+                                        <i data-lucide="map-pin" class="w-2.5 h-2.5"></i> 已定位
+                                    </span>
+                                ` : ''}
+                            </div>
+                        `;
+                    });
+                }
+
+                col.innerHTML = `
+                    <div class="flex items-center justify-between border-b pb-2">
+                        <div class="flex flex-col">
+                            <h4 class="font-bold text-sm text-slate-800 flex items-center gap-1.5">
+                                <span class="w-2 h-4 rounded" style="background-color: ${dayTheme.marker}"></span>
+                                Day ${dayIdx + 1}
+                            </h4>
+                            <input type="text" value="${day.region || ''}" placeholder="計畫去哪裡？" 
+                                   onblur="saveDayRegion(${dayIdx}, this.value)"
+                                   class="text-xs font-semibold text-slate-500 bg-transparent border-none p-0 mt-0.5 focus:ring-0 focus:outline-none placeholder:text-slate-300 w-full">
+                        </div>
+                        <button onclick="deleteDayColumn(${dayIdx})" class="p-1 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded transition" title="刪除整天">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+
+                    <!-- Column timeline dynamic box -->
+                    <div class="flex-1 flex flex-col gap-2.5 overflow-y-auto max-h-[380px] timeline-scroll pr-1 py-1">
+                        ${eventsHtml}
+                    </div>
+
+                    <!-- Bottom Plus Add button -->
+                    <button onclick="openAddEventModal(${dayIdx})" class="w-full py-1.5 border border-dashed border-slate-200 hover:border-indigo-400 text-slate-400 hover:text-indigo-600 rounded-xl transition text-[11px] font-bold flex items-center justify-center gap-1 mt-1">
+                        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                        新增行程
+                    </button>
+                `;
+
+                container.appendChild(col);
+            });
+
+            if (window.lucide) lucide.createIcons();
+            updateBatchColorBar();
+        }
+
+        // Inline field editors
+        function saveDayRegion(dayIdx, value) {
+            const trip = trips[activeTripIndex];
+            if (trip && trip.days[dayIdx]) {
+                const trimmed = value.trim();
+                if (trip.days[dayIdx].region !== trimmed) {
+                    pushToHistory();
+                    trip.days[dayIdx].region = trimmed;
+                    saveToStorage();
+                }
+            }
+        }
+
+        function saveEventNameInline(dayIdx, timeKey, text) {
+            const trip = trips[activeTripIndex];
+            if (trip && trip.days[dayIdx] && trip.days[dayIdx].events[timeKey]) {
+                const cleaned = text.trim();
+                if (cleaned) {
+                    if (trip.days[dayIdx].events[timeKey].name !== cleaned) {
+                        pushToHistory();
+                        trip.days[dayIdx].events[timeKey].name = cleaned;
+                        saveToStorage();
+                    }
+                } else {
+                    renderKanbanGrid(); // restore original text if empty
+                }
+            }
+        }
+
+        // Add/Delete day columns
+        function addNewDayToActiveTrip() {
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            pushToHistory();
+            trip.days.push({ region: '', events: {} });
+            enabledMapDays.push(trip.days.length - 1);
+
+            saveToStorage();
+            const activeTripDaysCount = document.getElementById('activeTripDaysCount');
+            if (activeTripDaysCount) activeTripDaysCount.innerText = trip.days.length;
+
+            renderDayNavBar();
+            renderKanbanGrid();
+            triggerNotification(`已新增一天！目前共 ${trip.days.length} 天。`);
+        }
+
+        function deleteDayColumn(dayIdx) {
+            const trip = trips[activeTripIndex];
+            if (!trip || trip.days.length <= 1) {
+                triggerNotification("行程必須至少保留一天！");
+                return;
+            }
+
+            showCustomConfirm(
+                `確定要移除 Day ${dayIdx + 1} 嗎？`, 
+                `移除後，該日底下所有的排程活動將會被全數清空移除。`, 
+                () => {
+                    pushToHistory();
+                    trip.days.splice(dayIdx, 1);
+                    selectedEvents = selectedEvents.filter(item => item.dayIdx !== dayIdx);
+                    selectedEvents = selectedEvents.map(item => {
+                        if (item.dayIdx > dayIdx) {
+                            return { dayIdx: item.dayIdx - 1, timeKey: item.timeKey };
+                        }
+                        return item;
+                    });
+
+                    enabledMapDays = enabledMapDays.filter(day => day !== dayIdx).map(day => {
+                        return day > dayIdx ? day - 1 : day;
+                    });
+                    
+                    saveToStorage();
+                    const activeTripDaysCount = document.getElementById('activeTripDaysCount');
+                    if (activeTripDaysCount) activeTripDaysCount.innerText = trip.days.length;
+
+                    renderDayNavBar();
+                    renderKanbanGrid();
+                    triggerNotification("天數刪除成功！");
+                }
+            );
+        }
+
+        // Drag and Drop Engine
+        function handleDragStart(e, dayIdx, timeKey) {
+            draggedData = { dayIdx, timeKey };
+            e.target.style.opacity = '0.4';
+        }
+
+        function handleDragEnd(e) {
+            e.target.style.opacity = '1';
+            draggedData = null;
+        }
+
+        function handleDragOver(e, col) {
+            e.preventDefault();
+            col.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e, col) {
+            col.classList.remove('drag-over');
+        }
+
+        // Dropping directly onto a Day Column body with 5-minute search resolve
+        function handleDropOnDay(e, targetDayIdx) {
+            e.preventDefault();
+            document.querySelectorAll('.day-drop-zone').forEach(el => el.classList.remove('drag-over'));
+
+            if (!draggedData) return;
+
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            const sourceDay = trip.days[draggedData.dayIdx];
+            const targetDay = trip.days[targetDayIdx];
+            
+            if (!sourceDay || !targetDay) return;
+
+            const sourceEvent = sourceDay.events[draggedData.timeKey];
+            const originalTime = draggedData.timeKey;
+
+            if (draggedData.dayIdx === targetDayIdx) {
+                return;
+            }
+
+            if (targetDay.events[originalTime]) {
+                let resolvedTime = null;
+                // Scan 5-minute increments from 06:00 to 23:55 to find an empty slot
+                for (let h = 6; h < 24; h++) {
+                    for (let m = 0; m < 60; m += 5) {
+                        const checkTime = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                        if (!targetDay.events[checkTime]) {
+                            resolvedTime = checkTime;
+                            break;
+                        }
+                    }
+                    if (resolvedTime) break;
+                }
+
+                if (resolvedTime) {
+                    pushToHistory();
+                    targetDay.events[resolvedTime] = sourceEvent;
+                    delete sourceDay.events[draggedData.timeKey];
+                    triggerNotification(`已移動行程，由於 ${originalTime} 已被佔用，自動排定至最接近空閒時段 ${resolvedTime}！`);
+                } else {
+                    triggerNotification(`該日全部時段已滿，無法移至該天！`);
+                    return;
+                }
+            } else {
+                pushToHistory();
+                targetDay.events[originalTime] = sourceEvent;
+                delete sourceDay.events[draggedData.timeKey];
+                triggerNotification(`已移至 Day ${targetDayIdx + 1} ${originalTime}！`);
+            }
+
+            selectedEvents = selectedEvents.filter(item => !(item.dayIdx === draggedData.dayIdx && item.timeKey === draggedData.timeKey));
+
+            saveToStorage();
+            renderKanbanGrid();
+        }
+
+        // Multi-select Batch Handlers
+        function toggleEventSelection(eventObj, dayIdx, timeKey) {
+            const isChecked = eventObj.target.checked;
+            if (isChecked) {
+                selectedEvents.push({ dayIdx, timeKey });
+            } else {
+                selectedEvents = selectedEvents.filter(item => !(item.dayIdx === dayIdx && item.timeKey === timeKey));
+            }
+            updateBatchColorBar();
+        }
+
+        function clearBatchSelection() {
+            selectedEvents = [];
+            renderKanbanGrid();
+        }
+
+        function updateBatchColorBar() {
+            const bar = document.getElementById('batchColorBar');
+            const countLabel = document.getElementById('batchSelectCount');
+            if (selectedEvents.length > 0) {
+                bar.classList.remove('hidden');
+                countLabel.innerText = selectedEvents.length;
+            } else {
+                bar.classList.add('hidden');
+            }
+        }
+
+        function changeBatchColor(colorClass) {
+            if (selectedEvents.length === 0) return;
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            pushToHistory();
+            selectedEvents.forEach(item => {
+                const day = trip.days[item.dayIdx];
+                if (day && day.events[item.timeKey]) {
+                    if (colorClass === 'auto') {
+                        delete day.events[item.timeKey].customBg;
+                    } else {
+                        day.events[item.timeKey].customBg = colorClass;
+                    }
+                }
+            });
+
+            saveToStorage();
+            selectedEvents = [];
+            renderKanbanGrid();
+            triggerNotification("已成功批次更改卡片顏色！");
+        }
+
+        function deleteBatchItems() {
+            if (selectedEvents.length === 0) return;
+
+            showCustomConfirm(
+                `確定刪除這 ${selectedEvents.length} 個行程嗎？`, 
+                `這將永久清除所有目前被勾選的所有時間段排程內容。`, 
+                () => {
+                    const trip = trips[activeTripIndex];
+                    if (!trip) return;
+
+                    pushToHistory();
+                    selectedEvents.forEach(item => {
+                        const day = trip.days[item.dayIdx];
+                        if (day) {
+                            delete day.events[item.timeKey];
+                        }
+                    });
+
+                    selectedEvents = [];
+                    saveToStorage();
+                    renderKanbanGrid();
+                    triggerNotification("所選行程已成功批次移除！");
+                }
+            );
+        }
+
+        function deleteEventSlot(dayIdx, timeKey) {
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            const name = trip.days[dayIdx].events[timeKey].name;
+            showCustomConfirm("刪除此行程？", `確定要清空 Day ${dayIdx + 1} 位於 ${timeKey} 的「${name}」行程嗎？`, () => {
+                pushToHistory();
+                delete trip.days[dayIdx].events[timeKey];
+                selectedEvents = selectedEvents.filter(item => !(item.dayIdx === dayIdx && item.timeKey === timeKey));
+                
+                saveToStorage();
+                renderKanbanGrid();
+                triggerNotification("排程已清除。");
+            });
+        }
+
+        // ADD / EDIT EVENT FORM LOGIC (Now in 5-minute increments)
+        function openAddEventModal(dayIdx) {
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            document.getElementById('eventModalTitle').innerText = `為 Day ${dayIdx + 1} 安排景點活動`;
+            document.getElementById('eventDayIndex').value = dayIdx;
+            document.getElementById('eventOriginalTimeKey').value = '';
+            
+            document.getElementById('eventName').value = '';
+            document.getElementById('eventLat').value = '';
+            document.getElementById('eventLng').value = '';
+            document.getElementById('eventNotes').value = '';
+            
+            tempUploadedImage = '';
+            document.getElementById('modalImagePreviewContainer').classList.add('hidden');
+            document.getElementById('modalImagePreview').src = '';
+
+            // Populate timeslots in modal select (5-minute increments)
+            const selectEl = document.getElementById('eventTimeSelect');
+            selectEl.innerHTML = '';
+            for (let h = 6; h < 24; h++) {
+                for (let m = 0; m < 60; m += 5) {
+                    const timeString = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                    const option = document.createElement('option');
+                    option.value = timeString;
+                    option.innerText = timeString;
+                    selectEl.appendChild(option);
+                }
+            }
+
+            openEventModal();
+            setTimeout(() => { initModalMap(); }, 350);
+        }
+
+        function editEvent(dayIdx, timeKey) {
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            const evt = trip.days[dayIdx].events[timeKey];
+            if (!evt) return;
+
+            document.getElementById('eventModalTitle').innerText = `編輯 Day ${dayIdx + 1} - ${timeKey} 行程`;
+            document.getElementById('eventDayIndex').value = dayIdx;
+            document.getElementById('eventOriginalTimeKey').value = timeKey;
+            
+            document.getElementById('eventName').value = evt.name;
+            document.getElementById('eventLat').value = evt.lat || '';
+            document.getElementById('eventLng').value = evt.lng || '';
+            document.getElementById('eventNotes').value = evt.notes || '';
+
+            // Handle event image preview
+            tempUploadedImage = evt.image || '';
+            const previewContainer = document.getElementById('modalImagePreviewContainer');
+            const previewEl = document.getElementById('modalImagePreview');
+            if (tempUploadedImage) {
+                previewEl.src = tempUploadedImage;
+                previewContainer.classList.remove('hidden');
+            } else {
+                previewContainer.classList.add('hidden');
+            }
+
+            // Populate timeslots in modal select (5-minute increments) and select active
+            const selectEl = document.getElementById('eventTimeSelect');
+            selectEl.innerHTML = '';
+            for (let h = 6; h < 24; h++) {
+                for (let m = 0; m < 60; m += 5) {
+                    const timeString = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                    const option = document.createElement('option');
+                    option.value = timeString;
+                    option.innerText = timeString;
+                    if (timeString === timeKey) {
+                        option.selected = true;
+                    }
+                    selectEl.appendChild(option);
+                }
+            }
+
+            openEventModal();
+            setTimeout(() => {
+                initModalMap(evt.lat, evt.lng);
+            }, 350);
+        }
+
+        function handleEventFormSubmit(e) {
+            e.preventDefault();
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            const dayIdx = parseInt(document.getElementById('eventDayIndex').value, 10);
+            const originalTimeKey = document.getElementById('eventOriginalTimeKey').value;
+            const newTimeKey = document.getElementById('eventTimeSelect').value;
+
+            const day = trip.days[dayIdx];
+            if (!day) return;
+
+            if (newTimeKey !== originalTimeKey && day.events[newTimeKey]) {
+                triggerNotification(`⚠️ ${newTimeKey} 時段已有其他行程「${day.events[newTimeKey].name}」，請選擇其他空閒時間！`);
+                return;
+            }
+
+            const name = document.getElementById('eventName').value.trim();
+            const latInput = document.getElementById('eventLat').value;
+            const lngInput = document.getElementById('eventLng').value;
+            const notes = document.getElementById('eventNotes').value.trim();
+
+            const lat = latInput !== '' ? parseFloat(latInput) : null;
+            const lng = lngInput !== '' ? parseFloat(lngInput) : null;
+
+            pushToHistory();
+
+            if (originalTimeKey && originalTimeKey !== newTimeKey) {
+                delete day.events[originalTimeKey];
+                selectedEvents = selectedEvents.filter(item => !(item.dayIdx === dayIdx && item.timeKey === originalTimeKey));
+            }
+
+            day.events[newTimeKey] = {
+                name: name,
+                notes: notes,
+                lat: lat,
+                lng: lng,
+                image: tempUploadedImage
+            };
+
+            saveToStorage();
+            renderKanbanGrid();
+            closeEventModal();
+            triggerNotification("已儲存行程。");
+        }
+
+        // Modal map pick interactions
+        function initModalMap(lat, lng) {
+            const defaultLat = lat || 35.6762; 
+            const defaultLng = lng || 139.6503; 
+
+            if (!modalMapInstance) {
+                modalMapInstance = L.map('modalMap').setView([defaultLat, defaultLng], 12);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19
+                }).addTo(modalMapInstance);
+
+                modalMapInstance.on('click', function(e) {
+                    const clickLat = e.latlng.lat;
+                    const clickLng = e.latlng.lng;
+                    updateModalLocationFields(clickLat, clickLng);
+                });
+            } else {
+                modalMapInstance.setView([defaultLat, defaultLng], 12);
+            }
+
+            if (modalMapMarker) {
+                modalMapInstance.removeLayer(modalMapMarker);
+                modalMapMarker = null;
+            }
+
+            if (lat && lng) {
+                modalMapMarker = L.marker([lat, lng]).addTo(modalMapInstance);
+            }
+        }
+
+        function updateModalLocationFields(lat, lng) {
+            document.getElementById('eventLat').value = lat.toFixed(6);
+            document.getElementById('eventLng').value = lng.toFixed(6);
+
+            if (modalMapMarker) {
+                modalMapInstance.removeLayer(modalMapMarker);
+            }
+            modalMapMarker = L.marker([lat, lng]).addTo(modalMapInstance);
+            modalMapInstance.panTo([lat, lng]);
+        }
+
+        // OpenStreetMap Location Quick Autocomplete Search
+        function searchLocationInModal() {
+            const searchVal = document.getElementById('modalMapSearch').value.trim();
+            if (!searchVal) return;
+
+            const dropdown = document.getElementById('modalSearchDropdown');
+            dropdown.innerHTML = '<div class="p-3 text-xs text-slate-400 animate-pulse">正在搜尋地址中...</div>';
+            dropdown.classList.remove('hidden');
+
+            const url = `https://nominatim.openstreetmap.org/search?format=json&accept-language=zh-TW,zh,en&limit=8&q=${encodeURIComponent(searchVal)}`;
+            
+            fetch(url)
+                .then(res => res.json())
+                .then(data => {
+                    dropdown.innerHTML = '';
+                    if (data.length === 0) {
+                        dropdown.innerHTML = '<div class="p-3 text-xs text-slate-400">找不到任何結果</div>';
+                        return;
+                    }
+                    data.forEach(item => {
+                        const displayName = item.display_name;
+                        const shortName = item.name || displayName.split(',')[0];
+                        const row = document.createElement('button');
+                        row.type = 'button';
+                        row.className = "w-full text-left px-4 py-2 hover:bg-slate-50 text-xs text-slate-700 transition flex flex-col gap-0.5 border-b border-slate-100 last:border-0";
+                        row.innerHTML = `
+                            <span class="font-bold text-slate-800">${shortName}</span>
+                            <span class="text-[10px] text-slate-400 truncate w-full">${displayName}</span>
+                        `;
+                        row.onclick = () => {
+                            const lat = parseFloat(item.lat);
+                            const lng = parseFloat(item.lon);
+                            updateModalLocationFields(lat, lng);
+                            
+                            // Auto-populate the Event title block with selected Chinese spot name
+                            document.getElementById('eventName').value = shortName;
+                            
+                            dropdown.classList.add('hidden');
+                        };
+                        dropdown.appendChild(row);
+                    });
+                })
+                .catch(err => {
+                    console.error("OSM search failed:", err);
+                    dropdown.innerHTML = '<div class="p-3 text-xs text-slate-400">連線失敗</div>';
+                });
+        }
+
+        // Event Modal JPEG Photo Compression Engine
+        function handleImageUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 400;
+                    const MAX_HEIGHT = 200;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    const compressedBase64 = canvas.toDataURL('image/jpeg', 0.65);
+                    tempUploadedImage = compressedBase64;
+
+                    const previewContainer = document.getElementById('modalImagePreviewContainer');
+                    const previewEl = document.getElementById('modalImagePreview');
+                    previewEl.src = compressedBase64;
+                    previewContainer.classList.remove('hidden');
+                    triggerNotification("相片已成功優化並載入預覽！");
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function removeUploadedImage() {
+            tempUploadedImage = '';
+            document.getElementById('modalImagePreviewContainer').classList.add('hidden');
+            document.getElementById('modalImagePreview').src = '';
+            triggerNotification("已移除圖片。");
+        }
+
+        // Leaflet Dynamic Map Render tab
+        function initMap() {
+            if (activeTab !== 'map') return;
+            const mapContainer = document.getElementById('map');
+            if (!mapContainer) return;
+
+            // Clear map memory reference to recreate
+            if (mapInstance) {
+                mapInstance.off();
+                mapInstance.remove();
+                mapInstance = null;
+            }
+
+            mapInstance = L.map('map').setView([35.6762, 139.6503], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19
+            }).addTo(mapInstance);
+
+            mapMarkersGroup = L.layerGroup().addTo(mapInstance);
+            mapLinesGroup = L.layerGroup().addTo(mapInstance);
+
+            renderMapElements();
+            renderMapLegend();
+        }
+
+        function renderMapElements() {
+            if (!mapInstance || !mapMarkersGroup || !mapLinesGroup) return;
+            mapMarkersGroup.clearLayers();
+            mapLinesGroup.clearLayers();
+
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            const boundsPoints = [];
+
+            trip.days.forEach((day, dayIdx) => {
+                if (!enabledMapDays.includes(dayIdx)) return;
+                const dayTheme = getDayTheme(dayIdx);
+
+                const sortedKeys = Object.keys(day.events || {}).sort();
+                const routeLineCoordinates = [];
+
+                let stepNo = 1;
+                sortedKeys.forEach(timeKey => {
+                    const evt = day.events[timeKey];
+                    if (evt && evt.lat && evt.lng) {
+                        routeLineCoordinates.push([evt.lat, evt.lng]);
+                        boundsPoints.push([evt.lat, evt.lng]);
+
+                        // Custom colored step markers
+                        const markerIcon = L.divIcon({
+                            className: 'custom-leaflet-marker',
+                            html: `<div class="flex items-center justify-center w-6 h-6 rounded-full text-white text-xs font-bold border-2 border-white shadow-md animate-none" style="background-color: ${dayTheme.marker}">${stepNo}</div>`,
+                            iconSize: [24, 24],
+                            iconAnchor: [12, 12]
+                        });
+
+                        L.marker([evt.lat, evt.lng], { icon: markerIcon })
+                            .bindPopup(`
+                                <div class="p-2 flex flex-col gap-1 max-w-[180px]">
+                                    <span class="text-[9px] font-bold text-indigo-700 uppercase font-mono">Day ${dayIdx + 1} - ${timeKey}</span>
+                                    <h5 class="font-bold text-xs text-slate-800">${evt.name}</h5>
+                                    ${evt.notes ? `<p class="text-[10px] text-slate-500 m-0">${evt.notes}</p>` : ''}
+                                </div>
+                            `)
+                            .addTo(mapMarkersGroup);
+
+                        stepNo++;
+                    }
+                });
+
+                // Draw dashed Polyline paths for routing
+                if (routeLineCoordinates.length > 1) {
+                    L.polyline(routeLineCoordinates, {
+                        color: dayTheme.marker,
+                        weight: 4,
+                        dashArray: '8, 8',
+                        opacity: 0.8
+                    }).addTo(mapLinesGroup);
+                }
+            });
+
+            if (boundsPoints.length > 0) {
+                mapInstance.fitBounds(boundsPoints, { padding: [50, 50] });
+            }
+        }
+
+        function renderMapLegend() {
+            const container = document.getElementById('mapLegendContainer');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            trip.days.forEach((day, dayIdx) => {
+                const dayTheme = getDayTheme(dayIdx);
+                const isChecked = enabledMapDays.includes(dayIdx) ? 'checked' : '';
+
+                const row = document.createElement('label');
+                row.className = "flex items-center justify-between p-2.5 rounded-xl border border-slate-200 bg-white shadow-sm cursor-pointer hover:bg-slate-50 transition";
+                row.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: ${dayTheme.marker}"></span>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-bold text-slate-800">Day ${dayIdx + 1}</span>
+                            <span class="text-[10px] text-slate-400 truncate max-w-[120px]">${day.region || '未設定區域'}</span>
+                        </div>
+                    </div>
+                    <input type="checkbox" ${isChecked} onchange="toggleMapDay(${dayIdx})" class="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500">
+                `;
+                container.appendChild(row);
+            });
+        }
+
+        function toggleMapDay(dayIdx) {
+            if (enabledMapDays.includes(dayIdx)) {
+                enabledMapDays = enabledMapDays.filter(day => day !== dayIdx);
+            } else {
+                enabledMapDays.push(dayIdx);
+            }
+            renderMapElements();
+        }
+
+        // Tab 3: Pre-trip Packing Checklist Generator
+        function renderChecklist() {
+            const container = document.getElementById('checklistCategoriesContainer');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const trip = trips[activeTripIndex];
+            if (!trip || !trip.checklist) return;
+
+            const categoryLabels = {
+                important: { title: "📑 重要證件與金流", color: "from-rose-50 to-rose-100/30 text-rose-800" },
+                clothing: { title: "👕 衣物與穿搭配件", color: "from-blue-50 to-blue-100/30 text-blue-800" },
+                electronics: { title: "🔌 電子數位與充電", color: "from-amber-50 to-amber-100/30 text-amber-800" },
+                toiletries: { title: "🧴 盥洗與個人美妝", color: "from-emerald-50 to-emerald-100/30 text-emerald-800" },
+                medicine: { title: "💊 必備常備保健藥品", color: "from-violet-50 to-violet-100/30 text-violet-800" }
+            };
+
+            Object.keys(categoryLabels).forEach(catKey => {
+                const cat = categoryLabels[catKey];
+                const listItems = trip.checklist[catKey] || [];
+
+                let itemsHtml = '';
+                if (listItems.length === 0) {
+                    itemsHtml = `<div class="text-[11px] text-slate-400 p-2 text-center">尚無任何行李項目</div>`;
+                } else {
+                    listItems.forEach((item, index) => {
+                        const checkedAttr = item.checked ? 'checked' : '';
+                        const crossedClass = item.checked ? 'line-through text-slate-400 font-normal' : 'text-slate-700 font-medium';
+                        
+                        itemsHtml += `
+                            <div class="flex items-center justify-between gap-1.5 p-2 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-100">
+                                <label class="flex items-center gap-2.5 cursor-pointer flex-1 py-1">
+                                    <input type="checkbox" ${checkedAttr} 
+                                           onchange="toggleChecklistItem('${catKey}', ${index})" 
+                                           class="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500">
+                                    <span class="text-xs ${crossedClass}">${item.name}</span>
+                                </label>
+                                <button onclick="deleteChecklistItem('${catKey}', ${index})" class="p-1 text-slate-300 hover:text-rose-500 rounded transition">
+                                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+
+                const catBox = document.createElement('div');
+                catBox.className = `bg-white border border-slate-200 rounded-2xl p-4 flex flex-col gap-3 shadow-sm`;
+                catBox.innerHTML = `
+                    <div class="bg-gradient-to-r ${cat.color} p-3 rounded-xl border-b border-slate-100">
+                        <h4 class="font-bold text-xs uppercase tracking-wide flex items-center justify-between">
+                            <span>${cat.title}</span>
+                            <span class="bg-white/85 text-[10px] px-1.5 py-0.5 rounded-full font-bold font-mono">${listItems.filter(i=>i.checked).length}/${listItems.length}</span>
+                        </h4>
+                    </div>
+                    <div class="flex flex-col gap-1 max-h-60 overflow-y-auto timeline-scroll pr-1">
+                        ${itemsHtml}
+                    </div>
+                `;
+
+                container.appendChild(catBox);
+            });
+
+            if (window.lucide) lucide.createIcons();
+        }
+
+        function toggleChecklistItem(category, index) {
+            const trip = trips[activeTripIndex];
+            if (trip && trip.checklist && trip.checklist[category]) {
+                const item = trip.checklist[category][index];
+                pushToHistory();
+                item.checked = !item.checked;
+                saveToStorage();
+                renderChecklist();
+            }
+        }
+
+        function deleteChecklistItem(category, index) {
+            const trip = trips[activeTripIndex];
+            if (trip && trip.checklist && trip.checklist[category]) {
+                const item = trip.checklist[category][index];
+                pushToHistory();
+                trip.checklist[category].splice(index, 1);
+                saveToStorage();
+                renderChecklist();
+                triggerNotification(`已刪除「${item.name}」`);
+            }
+        }
+
+        function openAddChecklistItemModal() {
+            document.getElementById('checklistName').value = '';
+            openChecklistModal();
+        }
+
+        function handleChecklistFormSubmit(e) {
+            e.preventDefault();
+            const trip = trips[activeTripIndex];
+            if (!trip || !trip.checklist) return;
+
+            const name = document.getElementById('checklistName').value.trim();
+            const category = document.getElementById('checklistCategory').value;
+
+            if (!trip.checklist[category]) {
+                trip.checklist[category] = [];
+            }
+
+            pushToHistory();
+            trip.checklist[category].push({ name, checked: false });
+            saveToStorage();
+
+            closeChecklistModal();
+            renderChecklist();
+            triggerNotification(`已成功加入「${name}」！`);
+        }
+
+        // EXPORT TO MICROSOFT EXCEL COMPATIBLE UTF-8 CSV
+        function exportToCSV() {
+            const trip = trips[activeTripIndex];
+            if (!trip) return;
+
+            let csvContent = "\ufeff";
+            csvContent += '"天數","地區","時間","景點名稱","詳細說明","緯度","經度"\r\n';
+
+            trip.days.forEach((day, dayIdx) => {
+                const regionName = day.region || "";
+                const sortedKeys = Object.keys(day.events || {}).sort();
+
+                if (sortedKeys.length === 0) {
+                    csvContent += `"Day ${dayIdx + 1}","${regionName.replace(/"/g, '""')}","","今日無行程","","",""\r\n`;
+                } else {
+                    sortedKeys.forEach(timeKey => {
+                        const evt = day.events[timeKey];
+                        const name = evt.name || "";
+                        const notes = evt.notes || "";
+                        const lat = evt.lat || "";
+                        const lng = evt.lng || "";
+
+                        csvContent += `"Day ${dayIdx + 1}","${regionName.replace(/"/g, '""')}","${timeKey}","${name.replace(/"/g, '""')}","${notes.replace(/"/g, '""')}","${lat}","${lng}"\r\n`;
+                    });
+                }
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const filename = `${trip.name}_行程規劃表.csv`;
+
+            const link = document.createElement("a");
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                triggerNotification("📊 成功匯出 Excel (CSV) 行程表！");
+            }
+        }
+
+        // Left Sidebar: Render Trips Lists
+        function renderTripSidebar() {
+            const container = document.getElementById('tripList');
+            if (!container) return;
+            container.innerHTML = '';
+
+            trips.forEach((trip, index) => {
+                const card = document.createElement('button');
+                card.className = `trip-card w-full text-left p-3.5 rounded-xl border border-slate-200 hover:border-indigo-400 bg-white shadow-sm hover:shadow transition flex flex-col gap-1`;
+                card.onclick = () => selectTrip(index);
+
+                card.innerHTML = `
+                    <div class="flex items-center justify-between w-full">
+                        <span class="font-bold text-xs text-slate-800 truncate pr-2">${trip.name}</span>
+                        <span class="text-[9px] font-bold text-slate-400 font-mono">${trip.days.length}天</span>
+                    </div>
+                    <span class="text-[10px] text-slate-400">${trip.startDate || '未定'} ~ ${trip.endDate || '未定'}</span>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Setup custom platform confirmations
+        let confirmActionCallback = null;
+        function showCustomConfirm(title, description, okCallback) {
+            document.getElementById('confirmTitle').innerText = title;
+            document.getElementById('confirmDesc').innerText = description;
+            confirmActionCallback = okCallback;
+
+            const modal = document.getElementById('confirmModal');
+            const content = document.getElementById('confirmModalContent');
+            modal.classList.remove('hidden');
+            setTimeout(() => {
+                content.classList.remove('scale-95', 'opacity-0');
+            }, 50);
+        }
+
+        function closeCustomConfirm() {
+            const modal = document.getElementById('confirmModal');
+            const content = document.getElementById('confirmModalContent');
+            content.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                confirmActionCallback = null;
+            }, 300);
+        }
+
+        // Trigger EventListeners bindings
+        document.addEventListener('DOMContentLoaded', () => {
+            loadTripsFromStorage();
+            renderTripSidebar();
+
+            // Bind Navigation Tabs Actions
+            const tabs = document.querySelectorAll('.tab-btn');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    tabs.forEach(t => t.className = "tab-btn flex-1 min-w-[90px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition duration-200 text-slate-600 hover:bg-slate-50");
+                    tab.className = "tab-btn flex-1 min-w-[90px] flex items-center justify-center gap-2 py-3 px-4 rounded-xl text-sm font-semibold transition duration-200 bg-indigo-600 text-white";
+                    
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
+                    
+                    activeTab = tab.getAttribute('data-tab');
+                    const activeContent = document.getElementById(`tab-${activeTab}`);
+                    if (activeContent) activeContent.classList.remove('hidden');
+
+                    if (activeTab === 'map') {
+                        setTimeout(() => { initMap(); }, 200);
+                    }
+                });
+            });
+
+            // Auto-load GAS URL from storage if exists
+            const savedUrl = localStorage.getItem('voyage_planner_gas_url');
+            const savedAuto = localStorage.getItem('voyage_planner_gas_autosync') === 'true';
+
+            if (savedUrl) {
+                document.getElementById('gasUrl').value = savedUrl;
+                document.getElementById('gasAutoSyncCheckbox').checked = savedAuto;
+                
+                setTimeout(() => {
+                    loadFromGAS(true);
+                }, 1000);
+            } else {
+                selectTrip(0);
+            }
+
+            initEventListeners();
+        });
+
+        function initEventListeners() {
+            // Edit dates button
+            const editTripDetailsBtn = document.getElementById('editTripDetailsBtn');
+            if (editTripDetailsBtn) {
+                editTripDetailsBtn.addEventListener('click', () => {
+                    const trip = trips[activeTripIndex];
+                    if (!trip) return;
+
+                    document.getElementById('tripModalTitle').innerText = "編輯行程資訊";
+                    document.getElementById('editTripIndex').value = activeTripIndex;
+                    document.getElementById('tripName').value = trip.name;
+                    document.getElementById('tripStartDate').value = trip.startDate || '';
+                    document.getElementById('tripEndDate').value = trip.endDate || '';
+
+                    openTripModal();
+                });
+            }
+
+            // Add Trip button
+            const addTripBtn = document.getElementById('addTripBtn');
+            if (addTripBtn) {
+                addTripBtn.addEventListener('click', () => {
+                    document.getElementById('tripModalTitle').innerText = "規劃新的奇妙旅程";
+                    document.getElementById('editTripIndex').value = '';
+                    document.getElementById('tripName').value = '';
+                    document.getElementById('tripStartDate').value = '';
+                    document.getElementById('tripEndDate').value = '';
+
+                    openTripModal();
+                });
+            }
+
+            // Delete Trip Handler
+            const deleteTripBtn = document.getElementById('deleteTripBtn');
+            if (deleteTripBtn) {
+                deleteTripBtn.addEventListener('click', () => {
+                    if (trips.length <= 1) {
+                        triggerNotification("請至少保留一個旅遊行程！");
+                        return;
+                    }
+                    showCustomConfirm(
+                        "確定要刪除此行程嗎？", 
+                        `這會將整個「${trips[activeTripIndex].name}」以及其中包含的所有天數及打包項目全部永久刪除。`, 
+                        () => {
+                            pushToHistory();
+                            trips.splice(activeTripIndex, 1);
+                            saveToStorage();
+                            renderTripSidebar();
+                            selectTrip(0);
+                            triggerNotification("行程已成功刪除！");
+                        }
+                    );
+                });
+            }
+
+            // Add Day column Action button
+            const addDayColBtn = document.getElementById('addDayColBtn');
+            if (addDayColBtn) {
+                addDayColBtn.addEventListener('click', () => {
+                    addNewDayToActiveTrip();
+                });
+            }
+
+            // Add Checklist item button
+            const addChecklistItemBtn = document.getElementById('addChecklistItemBtn');
+            if (addChecklistItemBtn) {
+                addChecklistItemBtn.addEventListener('click', () => {
+                    openAddChecklistItemModal();
+                });
+            }
+
+            // Confirmation dialogue controls
+            const confirmCancelBtn = document.getElementById('confirmCancelBtn');
+            if (confirmCancelBtn) {
+                confirmCancelBtn.addEventListener('click', closeCustomConfirm);
+            }
+            const confirmOkBtn = document.getElementById('confirmOkBtn');
+            if (confirmOkBtn) {
+                confirmOkBtn.addEventListener('click', () => {
+                    if (confirmActionCallback) {
+                        confirmActionCallback();
+                    }
+                    closeCustomConfirm();
+                });
+            }
+
+            // Form Submit handlers
+            const tripForm = document.getElementById('tripForm');
+            if (tripForm) {
+                tripForm.addEventListener('submit', handleTripFormSubmit);
+            }
+
+            const eventForm = document.getElementById('eventForm');
+            if (eventForm) {
+                eventForm.addEventListener('submit', handleEventFormSubmit);
+            }
+
+            const checklistForm = document.getElementById('checklistForm');
+            if (checklistForm) {
+                checklistForm.addEventListener('submit', handleChecklistFormSubmit);
+            }
+
+            // Backup / Export Actions
+            const exportBtn = document.getElementById('exportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', () => {
+                    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(trips));
+                    const dlAnchorElem = document.createElement('a');
+                    dlAnchorElem.setAttribute("href", dataStr);
+                    dlAnchorElem.setAttribute("download", `VoyagePlanner_Backup_${new Date().toISOString().slice(0,10)}.json`);
+                    dlAnchorElem.click();
+                });
+            }
+
+            const importBtn = document.getElementById('importBtn');
+            if (importBtn) {
+                importBtn.addEventListener('click', () => {
+                    document.getElementById('importFile').click();
+                });
+            }
+
+            const importFile = document.getElementById('importFile');
+            if (importFile) {
+                importFile.addEventListener('change', importTripsFromJSONFile);
+            }
+
+            const activeTripName = document.getElementById('activeTripName');
+            if (activeTripName) {
+                activeTripName.addEventListener('blur', () => {
+                    const trip = trips[activeTripIndex];
+                    if (trip) {
+                        const newName = activeTripName.innerText.trim();
+                        if (newName && trip.name !== newName) {
+                            pushToHistory();
+                            trip.name = newName;
+                            saveToStorage();
+                            renderTripSidebar();
+                            triggerNotification("行程標題已就地更新！");
+                        }
+                    }
+                });
+            }
+
+            const resetChecklistBtn = document.getElementById('resetChecklistBtn');
+            if (resetChecklistBtn) {
+                resetChecklistBtn.addEventListener('click', () => {
+                    showCustomConfirm("重設行李打包清單？", "這會把當前行程清單中所有的打勾狀態全數清空恢復未勾選狀態。", () => {
+                        const activeTrip = trips[activeTripIndex];
+                        if (activeTrip && activeTrip.checklist) {
+                            pushToHistory();
+                            Object.keys(activeTrip.checklist).forEach(cat => {
+                                activeTrip.checklist[cat].forEach(item => item.checked = false);
+                            });
+                            saveToStorage();
+                            renderChecklist();
+                            triggerNotification("行李打包清單已重設。");
+                        }
+                    });
+                });
+            }
+
+            // Input autocomplete triggers
+            const searchInput = document.getElementById('modalMapSearch');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    clearTimeout(searchDebounceTimeout);
+                    const val = e.target.value.trim();
+                    if (val.length < 2) {
+                        document.getElementById('modalSearchDropdown').classList.add('hidden');
+                        return;
+                    }
+                    searchDebounceTimeout = setTimeout(() => {
+                        searchLocationInModal();
+                    }, 500);
+                });
+            }
+
+            // Close suggestion dropdown if clicked outside
+            document.addEventListener('click', (e) => {
+                const dropdown = document.getElementById('modalSearchDropdown');
+                const searchGroup = document.getElementById('modalMapSearch');
+                if (dropdown && !dropdown.contains(e.target) && e.target !== searchGroup) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+        }
+
+        function handleTripFormSubmit(e) {
+            e.preventDefault();
+            const indexVal = document.getElementById('editTripIndex').value;
+            const name = document.getElementById('tripName').value.trim();
+            const start = document.getElementById('tripStartDate').value;
+            const end = document.getElementById('tripEndDate').value;
+
+            pushToHistory();
+
+            if (indexVal !== '') {
+                const idx = parseInt(indexVal, 10);
+                trips[idx].name = name;
+                trips[idx].startDate = start;
+                trips[idx].endDate = end;
+                triggerNotification("行程資料已成功更新！");
+            } else {
+                const newTrip = {
+                    name: name,
+                    startDate: start,
+                    endDate: end,
+                    coverImage: "",
+                    days: [
+                        { region: "", events: {} }
+                    ],
+                    checklist: {
+                        important: [{ name: "護照、機票與預約證件", checked: false }],
+                        clothing: [{ name: "換洗服飾", checked: false }],
+                        electronics: [{ name: "行動電源與充電組", checked: false }],
+                        toiletries: [{ name: "牙刷梳洗包", checked: false }],
+                        medicine: [{ name: "個人常備藥物", checked: false }]
+                    }
+                };
+                trips.push(newTrip);
+                activeTripIndex = trips.length - 1;
+                triggerNotification("全新精彩行程建立成功！");
+            }
+
+            saveToStorage();
+            renderTripSidebar();
+            selectTrip(activeTripIndex);
+            closeTripModal();
+        }
+
+        function importTripsFromJSONFile(e) {
+            const fileReader = new FileReader();
+            const files = e.target.files;
+            if (files.length === 0) return;
+
+            fileReader.onload = function(event) {
+                try {
+                    const imported = JSON.parse(event.target.result);
+                    pushToHistory();
+                    if (Array.isArray(imported)) {
+                        trips = imported;
+                    } else if (typeof imported === 'object' && imported.name) {
+                        trips.push(imported);
+                    } else {
+                        throw new Error("不正確的行程檔案結構！");
+                    }
+                    
+                    saveToStorage();
+                    renderTripSidebar();
+                    selectTrip(0);
+                    triggerNotification("📋 行程備份檔案已成功匯入！");
+                } catch(err) {
+                    console.error("Import JSON failed:", err);
+                    triggerNotification("❌ 匯入失敗！檔案結構格式不相容。");
+                }
+            };
+            fileReader.readAsText(files[0]);
+        }
+
+        // Modal Window Helpers
+        function openTripModal() {
+            const modal = document.getElementById('tripModal');
+            const content = document.getElementById('tripModalContent');
+            modal.classList.remove('hidden');
+            setTimeout(() => { content.classList.remove('scale-95', 'opacity-0'); }, 50);
+        }
+
+        function closeTripModal() {
+            const modal = document.getElementById('tripModal');
+            const content = document.getElementById('tripModalContent');
+            content.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); }, 300);
+        }
+
+        function openEventModal() {
+            const modal = document.getElementById('eventModal');
+            const content = document.getElementById('eventModalContent');
+            modal.classList.remove('hidden');
+            setTimeout(() => { content.classList.remove('scale-95', 'opacity-0'); }, 50);
+        }
+
+        function closeEventModal() {
+            const modal = document.getElementById('eventModal');
+            const content = document.getElementById('eventModalContent');
+            content.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); }, 300);
+        }
+
+        function openChecklistModal() {
+            const modal = document.getElementById('checklistModal');
+            const content = document.getElementById('checklistModalContent');
+            modal.classList.remove('hidden');
+            setTimeout(() => { content.classList.remove('scale-95', 'opacity-0'); }, 50);
+        }
+
+        function closeChecklistModal() {
+            const modal = document.getElementById('checklistModal');
+            const content = document.getElementById('checklistModalContent');
+            content.classList.add('scale-95', 'opacity-0');
+            setTimeout(() => { modal.classList.add('hidden'); }, 300);
+        }
+    </script>
+</body>
+</html>
